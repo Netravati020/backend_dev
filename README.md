@@ -4,17 +4,18 @@ A serverless backend for an exam platform providing secure sign-up and login API
 
 ---
 
-##  Features
+##  Features and install packages
 
 -  Company & Student Sign Up / Sign In
 -  Password hashing with `bcrypt`
 -  JWT-based Authentication
 -  Serverless deployment with AWS Lambda
 -  DynamoDB as database
+-  python -m venv venv
+-  source venv/bin/activate  # On Windows: venv\Scripts\activate
+-  pip install -r requirements.txt
+-  npm install -g serverless
+-  sls deploy
+-  sls offline start
 
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-npm install -g serverless
-sls deploy
-sls offline start
+
