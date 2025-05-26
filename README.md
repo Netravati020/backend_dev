@@ -12,10 +12,6 @@ A serverless backend for an exam platform providing secure sign-up and login API
 -  Serverless deployment with AWS Lambda
 -  DynamoDB as database
 
----
-
-## Project Structure
-
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
