@@ -1,13 +1,13 @@
 import os
+import uuid
 import boto3
 from flask import Blueprint, request, jsonify
-from utils.auth_utils import hash_password, check_password, generate_jwt
 from datetime import datetime
+from utils.auth_utils import generate_jwt
 
 student_bp = Blueprint('student', __name__)
 dynamodb = boto3.client('dynamodb', region_name=os.getenv("REGION_NAME", "us-east-1"))
 STUDENT_TABLE = os.getenv("STUDENT_TABLE", "Student")
-
 
 @student_bp.route('/signup/student', methods=['POST'])
 def signup_student():
@@ -15,79 +15,94 @@ def signup_student():
 
     required_fields = [
         "first_name", "last_name", "gender", "dob", "address", "postcode", "contact_phone",
-        "email", "document", "school_name", "school_percentage", "school_class",
-        "college_name", "college_percentage", "course", "class_10th_percentage",
-        "class_12th_percentage", "graduate"
+        "email", "document", "school_name", "school_percentage", "class",
+        "college_name", "college_percentage", "course",
+        "criteria_10th", "criteria_12th", "criteria_graduate"
     ]
-
     missing = [field for field in required_fields if field not in data]
     if missing:
         return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
-    email = data["email"]
-    result = dynamodb.get_item(TableName=STUDENT_TABLE, Key={"email": {"S": email}})
-    if 'Item' in result:
-        return jsonify({"error": "Student already exists"}), 409
-    # Validate DOB format
+    # Validate DOB format (expecting DD-MM-YYYY)
     try:
-        datetime.strptime(data["dob"], "%d-%m-%Y")
+        dob_obj = datetime.strptime(data["dob"], "%d-%m-%Y")
+        dob_iso = dob_obj.strftime("%Y-%m-%d")  # Store in ISO format
     except ValueError:
         return jsonify({"error": "DOB must be in DD-MM-YYYY format"}), 400
 
-    hashed_password = hash_password(data['password'])
+    # Generate unique student ID
+    student_id = str(uuid.uuid4())[:8]
 
+    # Check uniqueness (in rare conflict)
+    existing = dynamodb.get_item(
+        TableName=STUDENT_TABLE,
+        Key={"student_id": {"S": student_id}}
+    )
+    if "Item" in existing:
+        return jsonify({"error": "Student ID conflict, try again"}), 409
+
+    # Build the student item
     item = {
-        "email": {"S": email},
+        "student_id": {"S": student_id},
+        "email": {"S": data["email"]},
         "first_name": {"S": data["first_name"]},
         "last_name": {"S": data["last_name"]},
         "gender": {"S": data["gender"]},
-        "dob": {"S": data["dob"]},
+        "dob": {"S": dob_iso},
         "address": {"S": data["address"]},
         "postcode": {"S": data["postcode"]},
         "contact_phone": {"S": data["contact_phone"]},
         "document": {"S": data["document"]},
         "school_name": {"S": data["school_name"]},
         "school_percentage": {"S": str(data["school_percentage"])},
-        "school_class": {"S": data["school_class"]},
+        "class": {"S": data["school_class"]},
         "college_name": {"S": data["college_name"]},
         "college_percentage": {"S": str(data["college_percentage"])},
         "course": {"S": data["course"]},
-        "class_10th_percentage": {"BOOL": bool(data["criteria_10th"])},
-        "class_12th_percentage": {"BOOL": bool(data["criteria_12th"])},
-        "graduate": {"BOOL": bool(data["criteria_graduate"])},
+        "criteria_10th": {"BOOL": bool(data["criteria_10th"])},
+        "criteria_12th": {"BOOL": bool(data["criteria_12th"])},
+        "criteria_graduate": {"BOOL": bool(data["criteria_graduate"])}
     }
 
     dynamodb.put_item(TableName=STUDENT_TABLE, Item=item)
 
-    return jsonify({"message": "Student registered successfully"}), 201
+    return jsonify({
+        "message": "Student registered successfully",
+        "student_id": student_id,
+        "default_password": data["dob"]  # Expected format
+    }), 201
 
-@student_bp.route('/login/student', methods=['POST'])
+
+@student_bp.route('/login', methods=['POST'])
 def student_login():
     data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
+    student_id = data.get("student_id")
+    password = data.get("password")  # Expecting DD-MM-YYYY format
 
-    if not all([email, password]):
-        return jsonify({"error": "Missing email or password"}), 400
+    if not student_id or not password:
+        return jsonify({"error": "Student ID and password required"}), 400
 
-    dynamodb = boto3.client('dynamodb', region_name=os.getenv("REGION_NAME", "us-east-1"))
-    STUDENT_TABLE = os.getenv("STUDENT_TABLE", "Student")
+    try:
+        result = dynamodb.get_item(
+            TableName=STUDENT_TABLE,
+            Key={"student_id": {"S": student_id}}
+        )
+        student = result.get("Item")
+        if not student:
+            return jsonify({"error": "Student not found"}), 404
 
-    result = dynamodb.get_item(TableName=STUDENT_TABLE, Key={"email": {"S": email}})
-    student = result.get("Item")
+        # Validate DOB as password
+        stored_dob = datetime.strptime(student["dob"]["S"], "%Y-%m-%d").strftime("%d-%m-%Y")
+        if stored_dob != password:
+            return jsonify({"error": "Invalid credentials"}), 401
 
-    if not student:
-        return jsonify({"error": "Invalid credentials"}), 401
+        token = generate_jwt({"student_id": student_id, "role": "student"})
+        return jsonify({
+            "message": "Login successful",
+            "token": token,
+            "student_id": student_id
+        }), 200
 
-    stored_hashed_password = student["password"]["S"]
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    if not check_password(password, stored_hashed_password):
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    token_payload = {
-        "email": email,
-        "role": "student"
-    }
-    token = generate_jwt(token_payload)
-
-    return jsonify({"message": "Login successful", "token": token}), 200
